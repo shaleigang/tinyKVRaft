@@ -26,31 +26,37 @@ void RaftRPCClient::onConnection(const tmuduo::net::TcpConnectionPtr &conn) {
 
 void RaftRPCClient::onVoteResponse(RequestVoteReply* response) {
     LOG_DEBUG("Get vote response");
+
+    voteReplyCallback_(response);
+
     delete(response);
 }
 
-void RaftRPCClient::onAppendResponse(RequestAppendReply* response) {
+void RaftRPCClient::onAppendResponse(AppendReplyCallbackMsg msg, RequestAppendReply* response) {
     LOG_DEBUG("Get append response");
+
+    auto ret = appendReplyCallback_(msg, response);
+    if (ret != nullptr) {
+        makeAppendRequest(msg.first, ret);
+    }
     delete(response);
 }
 
-void RaftRPCClient::voteRequest() {
-    RequestVoteArgs request;
+void RaftRPCClient::voteRequest(RequestVoteArgsPtr& request) {
     RequestVoteReply* response = new RequestVoteReply;
-    stub_->RequestVote(nullptr, &request, response, NewCallback(this, &RaftRPCClient::onVoteResponse, response));
+    stub_->RequestVote(nullptr, request.get(), response, NewCallback(this, &RaftRPCClient::onVoteResponse, response));
 }
 
-void RaftRPCClient::appendRequest() {
-    RequestAppendArgs request;
+void RaftRPCClient::appendRequest(uint32_t target_server, RequestAppendArgsPtr& request) {
     RequestAppendReply* response = new RequestAppendReply;
-    stub_->RequestAppend(nullptr, &request, response, NewCallback(this, &RaftRPCClient::onAppendResponse, response));
+    stub_->RequestAppend(nullptr, request.get(), response, NewCallback(this, &RaftRPCClient::onAppendResponse, std::make_pair(target_server, request), response));
 }
 
-void RaftRPCClient::makeVoteRequest() {
-    loop_->runInLoop(std::bind(&RaftRPCClient::voteRequest, this));
+void RaftRPCClient::makeVoteRequest(RequestVoteArgsPtr& request) {
+    loop_->runInLoop(std::bind(&RaftRPCClient::voteRequest, this, request));
 }
 
-void RaftRPCClient::makeAppendRequest() {
-    loop_->runInLoop(std::bind(&RaftRPCClient::appendRequest, this));
+void RaftRPCClient::makeAppendRequest(uint32_t target_server, RequestAppendArgsPtr& request) {
+    loop_->runInLoop(std::bind(&RaftRPCClient::appendRequest, this, target_server, request));
 }
 

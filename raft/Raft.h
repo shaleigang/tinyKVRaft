@@ -11,10 +11,9 @@
 #include <tinyMuduo/net/rpc/RpcServer.h>
 
 #include "RaftRPCClient.h"
+#include "RaftRPCImp.h"
 
 namespace raft {
-
-class RaftRPCImp;
 
 using tmuduo::net::TimerId;
 
@@ -42,6 +41,7 @@ public:
     uint32_t term() { return currentTerm_; }
     tmuduo::net::RpcServer& getRpcServer() { return server_; }
     void setApplyFunc(ApplyFunc&& func) { applyFunc_ = std::move(func); }
+    uint32_t getId() {return myId_; }
 
 private:
     void resetLeaderState();
@@ -61,7 +61,13 @@ private:
     static void defaultApplyFunc(uint32_t server_id, LogEntry);
     void updateCommitIndex();
 
+    void onRequestVote(const RequestVoteArgs* request, RequestVoteReply* response);
+    void onRequestAppend(const RequestAppendArgs* request, RequestAppendReply* response);
+    void onVoteReply(RequestVoteReply* response);
+    RequestAppendArgsPtr onAppendReply(RaftRPCClient::AppendReplyCallbackMsg msg, RequestAppendReply* response);
+
 private:
+
     tmuduo::net::EventLoop* loop_;
     tmuduo::net::RpcServer server_;
     RaftRPCImp* raftRPCService_;

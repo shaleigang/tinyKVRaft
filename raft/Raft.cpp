@@ -3,12 +3,13 @@
 //
 
 #include "Raft.h"
-#include "RaftRPCImp.h"
 
 #include <tinyMuduo/base/Logger.h>
 
 using namespace raft;
 using tmuduo::Logger;
+using std::placeholders::_1;
+using std::placeholders::_2;
 
 Raft::Raft(tmuduo::net::EventLoop *loop,
            const tmuduo::net::InetAddress &serverAddr,
@@ -26,10 +27,10 @@ Raft::Raft(tmuduo::net::EventLoop *loop,
     lastApplied_(0),
     heartbeatInterval_(0.1),
     running_(false),
-    applyFunc_(std::bind(&Raft::defaultApplyFunc,
-                         std::placeholders::_1, std::placeholders::_2)){
+    applyFunc_(std::bind(&Raft::defaultApplyFunc, _1, _2)){
 
-    raftRPCService_ = new RaftRPCImp(this);
+    raftRPCService_ = new RaftRPCImp(std::bind(&Raft::onRequestVote, this, _1, _2),
+                                     std::bind(&Raft::onRequestAppend, this, _1, _2));
     server_.registerService(raftRPCService_);
     server_.start();
 
@@ -39,6 +40,19 @@ Raft::Raft(tmuduo::net::EventLoop *loop,
     logs_.push_back(entry);
 
     resetLeaderState();
+
+    for(int i = 0; i < peers_.size(); ++i) {
+        if(i != myId_) {
+            peers_[i]->setVoteReplyCallback(std::bind(&Raft::onVoteReply, this, _1));
+            peers_[i]->setAppendReplyCallback(std::bind(&Raft::onAppendReply, this, _1, _2));
+        }
+    }
+
+    for(int i = 0; i < peers_.size(); ++i) {
+        if(i != myId_) {
+            peers_[i]->connect();
+        }
+    }
 }
 
 Raft::~Raft() {
@@ -133,7 +147,12 @@ void Raft::CandidateRequestVote() {
 
     for (int i = 0; i < peers_.size(); ++i) {
         if(i != myId_) {
-            peers_[i]->makeVoteRequest();
+            RequestVoteArgsPtr request = std::make_shared<RequestVoteArgs>();
+            request->set_term(currentTerm_);
+            request->set_candidateid(myId_);
+            request->set_lastlogterm(getLogEntryAt(getLastEntryIndex()).term());
+            request->set_lastlogindex(getLastEntryIndex());
+            peers_[i]->makeVoteRequest(request);
         }
     }
 }
@@ -145,8 +164,14 @@ void Raft::heartbeat() {
 
     for (int i = 0; i < peers_.size(); ++i) {
         if(i != myId_) {
-            // TODO: FIX THIS
-            peers_[i]->makeAppendRequest();
+            RequestAppendArgsPtr request = std::make_shared<RequestAppendArgs>();
+            request->set_term(currentTerm_);
+            request->set_leaderid(myId_);
+            int nextIndex = nextIndex_[i];
+            request->set_prevlogindex(nextIndex - 1);
+            request->set_prevlogterm(logs_[nextIndex - 1].term());
+            request->set_leadercommit(commitIndex_);
+            peers_[i]->makeAppendRequest(i, request);
         }
     }
 }
@@ -185,6 +210,145 @@ void Raft::updateCommitIndex() {
     if (state_ == Leader && N > commitIndex_ && logs_[N].term() == currentTerm_) {
         commitIndex_ = N;
         applyLogs();
+    }
+}
+
+void Raft::onRequestVote(const raft::RequestVoteArgs *request, raft::RequestVoteReply *response) {
+    if (request->term() < currentTerm_) {
+        response->set_term(currentTerm_);
+        response->set_votegranted(false);
+        LOG_DEBUG("vote reject %d", request->candidateid());
+    }
+    else {
+        response->set_term(currentTerm_);
+        if (votedFor_ == -1 && !thisIsMoreUpToDate(request->lastlogindex(), request->lastlogterm())) {
+            votedFor_ = request->candidateid();
+            response->set_votegranted(true);
+            LOG_DEBUG("vote for %d", request->candidateid());
+        }
+        else {
+            response->set_votegranted(false);
+            LOG_DEBUG("vote reject %d", request->candidateid());
+        }
+        if (request->term() > currentTerm_) {
+            turnToFollower(request->term());
+        }
+    }
+}
+
+void Raft::onRequestAppend(const raft::RequestAppendArgs *request, raft::RequestAppendReply *response) {
+    LOG_DEBUG("get log append from %d", request->leaderid());
+    response->set_term(currentTerm_);
+
+    if(request->term() < currentTerm_) {
+        response->set_success(false);
+        response->set_conflictindex(0);
+        response->set_conflictindex(0);
+    }
+    else {
+        turnToFollower(request->term());
+
+        uint32_t preLogIndex = request->prevlogindex();
+        if((preLogIndex == 0) ||
+        (preLogIndex <= getLastEntryIndex() && logs_[preLogIndex].term() == request->prevlogterm())) {
+            response->set_success(true);
+            response->set_conflictindex(0);
+            response->set_conflictterm(0);
+
+            if (request->entries_size() > 0) {
+                logs_.erase(logs_.begin() + preLogIndex + 1, logs_.end());
+
+                std::vector<LogEntry> newLogs_;
+                for (int i = 0; i < request->entries_size(); ++i) {
+                    const LogEntry &entry = request->entries(i);
+                    newLogs_.push_back(entry);
+                }
+                const LogEntry &lastEntry = request->entries(request->entries_size() - 1);
+                uint32_t index = preLogIndex + request->entries_size() + 1;
+                if (index <= getLastEntryIndex() && logs_[index].term() >= lastEntry.term()) {
+                    for (uint32_t i = index; i < logs_.size(); ++i) {
+                        newLogs_.push_back(logs_[i]);
+                    }
+                }
+                logs_.insert(logs_.end(), newLogs_.begin(), newLogs_.end());
+            }
+
+            if (request->leadercommit() > commitIndex_) {
+                commitIndex_ = std::min(request->leadercommit(), getLastEntryIndex());
+                applyLogs();
+            }
+        }
+        else {
+            response->set_success(false);
+            uint32_t preLogIndex = request->prevlogindex();
+            if (preLogIndex > getLastEntryIndex()) {
+                response->set_conflictindex(logs_.size());
+                response->set_conflictterm(0);
+            }
+            else {
+                response->set_conflictterm(getLogEntryAt(preLogIndex).term());
+                uint32_t i = preLogIndex;
+                while (i > 0 && getLogEntryAt(i).term() == response->conflictterm()) {
+                    --i;
+                }
+                response->set_conflictindex(i + 1);
+            }
+        }
+    }
+}
+
+void Raft::onVoteReply(raft::RequestVoteReply *response) {
+    if(currentTerm_ < response->term()) {
+        LOG_DEBUG("failed in election, become follower");
+        turnToFollower(response->term());
+    }
+    else if (response->votegranted() && state_ == Candidate && response->term() == currentTerm_) {
+        ++votedGain_;
+        if(votedGain_ > (peers_.size() / 2)) {
+            turnToLeader();
+        }
+    }
+}
+
+RequestAppendArgsPtr Raft::onAppendReply(RaftRPCClient::AppendReplyCallbackMsg msg, raft::RequestAppendReply *response) {
+    uint32_t targetServer = msg.first;
+    RequestAppendArgsPtr request = msg.second;
+    if(state_ != Leader && currentTerm_ != request->term()) {
+        return nullptr;
+    }
+    if(response->success()) {
+        matchIndex_[targetServer] = request->prevlogindex() + request->entries_size();
+        nextIndex_[targetServer] = matchIndex_[targetServer] + 1;
+        LOG_DEBUG("update next_index[%d] to %d", targetServer, nextIndex_[targetServer]);
+        updateCommitIndex();
+        return nullptr;
+    }
+    else {
+        if (request->term() < response->term()) {
+            nextIndex_[targetServer] = response->conflictindex();
+            return nullptr;
+        }
+        else {
+            if (response->conflictterm() == 0) {
+                nextIndex_[targetServer] = response->conflictindex();
+            }
+            else {
+                uint32_t preLogIndex = request->prevlogindex();
+                while ((preLogIndex >= response->conflictindex()) && logs_[preLogIndex].term() != response->conflictterm()) {
+                    --preLogIndex;
+                }
+                nextIndex_[targetServer] = preLogIndex + 1;
+            }
+            uint32_t nextIndex = nextIndex_[targetServer];
+            RequestAppendArgsPtr newRequest = std::make_shared<RequestAppendArgs>();
+            newRequest->set_term(currentTerm_);
+            newRequest->set_leaderid(myId_);
+            newRequest->set_prevlogindex(nextIndex - 1);
+            newRequest->set_prevlogterm(logs_[nextIndex - 1].term());
+            newRequest->set_leadercommit(commitIndex_);
+            LOG_DEBUG("resend append rpc to %d change pre_log_index to ", targetServer, nextIndex - 1);
+            return newRequest;
+        }
     }
 }
 

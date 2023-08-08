@@ -3,23 +3,30 @@
 //
 
 #include "RaftRPCImp.h"
+#include "Raft.h"
 #include <tinyMuduo/base/Logger.h>
+
+#include <utility>
 
 using tmuduo::Logger;
 using namespace raft;
 
-RaftRPCImp::RaftRPCImp(Raft* raft)
-  : raft_(raft){
+RaftRPCImp::RaftRPCImp(raft::RaftRPCImp::RPCVoteCallback onRequestVoteCallback,
+                       raft::RaftRPCImp::RPCAppendCallback onRequestAppendCallback)
+  : onRequestVoteCallback_(onRequestVoteCallback),
+    onRequestAppendCallback_(onRequestAppendCallback) {
 
 }
+
 
 void RaftRPCImp::RequestVote(::google::protobuf::RpcController* controller,
                              const ::raft::RequestVoteArgs* request,
                              ::raft::RequestVoteReply* response,
                              ::google::protobuf::Closure* done) {
     LOG_INFO("RaftRPC::RequestVote");
-    response->set_term(123);
-    response->set_votegranted(true);
+
+    onRequestVoteCallback_(request, response);
+
     if(done) {
         done->Run();
     }
@@ -30,8 +37,9 @@ void RaftRPCImp::RequestAppend(::google::protobuf::RpcController* controller,
                                ::raft::RequestAppendReply* response,
                                ::google::protobuf::Closure* done) {
     LOG_INFO("RaftRPC::RequestAppend");
-    response->set_term(123);
-    response->set_success(true);
+
+    onRequestAppendCallback_(request, response);
+
     if(done) {
         done->Run();
     }

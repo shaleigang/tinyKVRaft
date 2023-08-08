@@ -26,22 +26,18 @@ using tmuduo::Logger;
 using tmuduo::net::RpcClient;
 
 typedef std::shared_ptr<RequestVoteArgs> RequestVoteArgsPtr;
-typedef std::shared_ptr<RequestVoteReply> RequestVoteReplyPtr;
 typedef std::shared_ptr<RequestAppendArgs> RequestAppendArgsPtr;
-typedef std::shared_ptr<RequestAppendReply> RequestAppendReplyPtr;
 
 class RaftRPCClient {
 public:
+    typedef std::pair<uint32_t, RequestAppendArgsPtr> AppendReplyCallbackMsg;
+    typedef std::function<void(RequestVoteReply*)> VoteReplyCallback;
+    typedef std::function<RequestAppendArgsPtr (AppendReplyCallbackMsg, RequestAppendReply*)> AppendReplyCallback;
 
     RaftRPCClient(EventLoop* loop, const InetAddress& serverAddr);
 
-    // TODO: FIX THIS
-    void makeVoteRequest();
-    void makeAppendRequest();
-
-    void runEvery(double second) {
-        loop_->runEvery(1, std::bind(&RaftRPCClient::runFunc, this));
-    }
+    void makeVoteRequest(RequestVoteArgsPtr& request);
+    void makeAppendRequest(uint32_t target_server, RequestAppendArgsPtr& request);
 
     void connect() {
         client_.connect();
@@ -51,24 +47,25 @@ public:
         client_.disconnect();
     }
 
+    void setVoteReplyCallback(const VoteReplyCallback& cb) { voteReplyCallback_ = cb; }
+    void setAppendReplyCallback(const AppendReplyCallback& cb) { appendReplyCallback_ = cb; }
+
 private:
-    void voteRequest();
-    void appendRequest();
+    void voteRequest(RequestVoteArgsPtr& request);
+    void appendRequest(uint32_t target_server, RequestAppendArgsPtr& request);
 
     void onVoteResponse(RequestVoteReply* response);
-    void onAppendResponse(RequestAppendReply* response);
+    void onAppendResponse(AppendReplyCallbackMsg msg, RequestAppendReply* response);
 
     void onConnection(const TcpConnectionPtr& conn);
-
-    void runFunc() {
-        LOG_INFO("cycle run...");
-    }
 
 private:
     EventLoop* loop_;
     RpcClient client_;
     RaftRPC::Stub* stub_;
-    Raft* raft_;
+
+    VoteReplyCallback voteReplyCallback_;
+    AppendReplyCallback appendReplyCallback_;
 };
 
 typedef std::shared_ptr<RaftRPCClient> RaftRPCClientPtr;

@@ -13,10 +13,12 @@ class Raft;
 
 class RaftRPCImp : public RaftRPC {
 public:
-    RaftRPCImp() = default;
-    RaftRPCImp(Raft* raft);
+    typedef std::function<void(const RequestVoteArgs*, RequestVoteReply*)> RPCVoteCallback;
+    typedef std::function<void(const RequestAppendArgs*, RequestAppendReply*)> RPCAppendCallback;
 
-    // TODO: COMPLETE THIS
+    RaftRPCImp() = default;
+    RaftRPCImp(RPCVoteCallback, RPCAppendCallback);
+
     void RequestVote(::google::protobuf::RpcController* controller,
                      const ::raft::RequestVoteArgs* request,
                      ::raft::RequestVoteReply* response,
@@ -26,8 +28,12 @@ public:
                        ::raft::RequestAppendReply* response,
                        ::google::protobuf::Closure* done) override;
 
+    void setVoteCallback(const RPCVoteCallback& cb) { onRequestVoteCallback_ = cb; }
+    void setAppendCallback(const RPCAppendCallback& cb) { onRequestAppendCallback_ = cb; }
+
 private:
-    Raft* raft_;
+    RPCVoteCallback onRequestVoteCallback_;
+    RPCAppendCallback onRequestAppendCallback_;
 };
 
 }
