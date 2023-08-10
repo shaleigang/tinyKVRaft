@@ -171,6 +171,7 @@ void Raft::heartbeat() {
             request->set_prevlogindex(nextIndex - 1);
             request->set_prevlogterm(logs_[nextIndex - 1].term());
             request->set_leadercommit(commitIndex_);
+            constructLog(nextIndex, request);
             peers_[i]->makeAppendRequest(i, request);
         }
     }
@@ -346,6 +347,7 @@ RequestAppendArgsPtr Raft::onAppendReply(RaftRPCClient::AppendReplyCallbackMsg m
             newRequest->set_prevlogindex(nextIndex - 1);
             newRequest->set_prevlogterm(logs_[nextIndex - 1].term());
             newRequest->set_leadercommit(commitIndex_);
+            constructLog(nextIndex, request);
             LOG_DEBUG("resend append rpc to %d change pre_log_index to ", targetServer, nextIndex - 1);
             return newRequest;
         }
