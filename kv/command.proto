@@ -9,20 +9,25 @@ enum Ops {
     INSERT = 2;
 }
 
-message KvCommnad {
+enum Error {
+    ERROR_OK = 0;
+    ERROR_NO_KEY = 1;
+}
+
+message KvCommand {
 	Ops operation = 1;
 	string key = 2;
 	string value = 3;
 	int64 cid = 4;
 	uint32 seq = 5;
-}
+};
 
-message KvCommnadReply {
+message KvCommandReply {
 	bool leader = 1;
 	string error = 2;
 	string value = 3;
-}
+};
 
 service CommandRPC {
-    rpc Command(KvCommand) returns (kvCommandReply);
+    rpc Command(KvCommand) returns (KvCommandReply);
 }

@@ -25,7 +25,7 @@ public:
     int getRandomLevel();
     Node<K,V>* createNode(K key, V value, int level);
     int insertNode(const K key, const V value);
-    bool searchNode(K key);
+    bool searchNode(K key, K& ret);
     void deleteNode(K key);
 
     void dumpFile();
@@ -171,7 +171,7 @@ void SkipList<K, V>::deleteNode(K key) {
 }
 
 template<typename K, typename V>
-bool SkipList<K, V>::searchNode(K key) {
+bool SkipList<K, V>::searchNode(K key, K& ret) {
 
     std::cout << "search_element-----------------" << std::endl;
     Node<K, V> *current = header_;
@@ -184,8 +184,8 @@ bool SkipList<K, V>::searchNode(K key) {
 
     current = current->forward[0];
 
-    if (current and current->get_key() == key) {
-        std::cout << "Found key: " << key << ", value: " << current->get_value() << std::endl;
+    if (current and current->getKey() == key) {
+        ret =  current->get_value();
         return true;
     }
 
